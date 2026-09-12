@@ -78,22 +78,21 @@ int main(int argc,char **argv) {
   cudaDeviceProp props{};
   if ((err = cudaGetDeviceProperties(&props, device)) != cudaSuccess) { fprintf(stderr,"cudaGetDeviceProperties failed: %s\n", cudaGetErrorString(err)); return 4; }
   fprintf(stderr,"CUDA device %d: %s (compute %d.%d)\n", device, props.name, props.major, props.minor);
-  Job *djob; unsigned long long *dfound,*dcount;
-  if ((err = cudaMalloc(&djob,sizeof(Job))) != cudaSuccess || (err = cudaMalloc(&dfound,8)) != cudaSuccess || (err = cudaMalloc(&dcount,8)) != cudaSuccess) {
+  unsigned long long *dfound,*dcount;
+  if ((err = cudaMalloc(&dfound,8)) != cudaSuccess || (err = cudaMalloc(&dcount,8)) != cudaSuccess) {
     fprintf(stderr,"cudaMalloc failed: %s\n", cudaGetErrorString(err)); return 5;
   }
   unsigned long long missing=0xffffffffffffffffULL, zero=0;
-  cudaMemcpy(djob,&job,sizeof(Job),cudaMemcpyHostToDevice); cudaMemcpy(dfound,&missing,8,cudaMemcpyHostToDevice); cudaMemcpy(dcount,&zero,8,cudaMemcpyHostToDevice);
+  cudaMemcpy(dfound,&missing,8,cudaMemcpyHostToDevice); cudaMemcpy(dcount,&zero,8,cudaMemcpyHostToDevice);
   const int threads=256, blocks=4096; const uint64_t batch=(uint64_t)threads*blocks;
   while (true) {
-    mine_kernel<<<blocks,threads>>>(*djob,dfound,dcount);
+    mine_kernel<<<blocks,threads>>>(job,dfound,dcount);
     if ((err = cudaGetLastError()) != cudaSuccess || (err = cudaDeviceSynchronize()) != cudaSuccess) { fprintf(stderr,"CUDA kernel failed: %s\n", cudaGetErrorString(err)); return 6; }
     unsigned long long found; cudaMemcpy(&found,dfound,8,cudaMemcpyDeviceToHost);
     unsigned long long count; cudaMemcpy(&count,dcount,8,cudaMemcpyDeviceToHost);
     if(found!=missing){printf("FOUND %llu\n",found); fflush(stdout); printf("HASHES %llu\n",count); fflush(stdout); break;}
     printf("PROGRESS %llu\n",count); fflush(stdout);
     job.start += batch * job.stride;
-    cudaMemcpy(djob,&job,sizeof(Job),cudaMemcpyHostToDevice);
   }
-  cudaFree(djob);cudaFree(dfound);cudaFree(dcount); return 0;
+  cudaFree(dfound);cudaFree(dcount); return 0;
 }
