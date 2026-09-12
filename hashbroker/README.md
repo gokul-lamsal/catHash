@@ -25,7 +25,9 @@ For a local build, you can still override detection with one architecture:
 NVCC_ARCH=89 make -C cuda
 ```
 
-The JS process automatically discovers every GPU reported by `nvidia-smi`, starts one CUDA worker per GPU, aggregates speed/hash counters, and submits the first valid proof.
+The JS process automatically discovers every GPU reported by `nvidia-smi`, starts one CUDA worker per GPU, aggregates speed/hash counters, and submits the first valid proof. The GitHub release is built with CUDA 11.8 for compatibility with common VPS driver 525 installations and includes `sm_75`, `sm_80`, `sm_86`, and `sm_89`.
+
+If the CUDA worker exits, run `./cuda/hashbroker_cuda 0 1 0 1` with 13 hexadecimal job words only for diagnostics; the worker will print the CUDA device, compute capability, and driver error to stderr.
 
 ## Run
 

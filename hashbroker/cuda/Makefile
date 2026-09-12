@@ -14,7 +14,7 @@ GPU_ARCHES := 75 80 86 89 90
 endif
 GENCODE := $(foreach arch,$(GPU_ARCHES),-gencode arch=compute_$(arch),code=sm_$(arch))
 else ifeq ($(NVCC_ARCH),all)
-GENCODE := $(foreach arch,75 80 86 89 90,-gencode arch=compute_$(arch),code=sm_$(arch))
+GENCODE := $(foreach arch,75 80 86 89,-gencode arch=compute_$(arch),code=sm_$(arch))
 else
 ARCH_NUM := $(shell echo $(NVCC_ARCH) | sed 's/[^0-9]//g')
 GENCODE := -gencode arch=compute_$(ARCH_NUM),code=sm_$(ARCH_NUM)
