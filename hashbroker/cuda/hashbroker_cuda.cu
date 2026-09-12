@@ -57,11 +57,18 @@ __device__ bool meets(const uint32_t h[8], uint32_t bits) {
   return rem==0 || (h[full] >> (32-rem)) == 0;
 }
 
-__global__ void mine_kernel(Job job, unsigned long long *found, unsigned long long *count) {
+__device__ uint32_t leading_bits(const uint32_t h[8]) {
+  uint32_t bits=0;
+  for (int i=0;i<8;i++) { if (h[i]==0) { bits+=32; continue; } bits += __clz(h[i]); break; }
+  return bits;
+}
+
+__global__ void mine_kernel(Job job, unsigned long long *found, unsigned long long *count, unsigned int *bestBits) {
   uint64_t id=(uint64_t)blockIdx.x*blockDim.x+threadIdx.x;
   uint64_t nonce=job.start+id*job.stride;
   uint32_t h[8]; hash_job(job,nonce,h);
   atomicAdd(count,1ULL);
+  atomicMax(bestBits,leading_bits(h));
   if (meets(h,job.difficulty)) atomicCAS(found,0xffffffffffffffffULL,nonce);
 }
 
@@ -78,21 +85,22 @@ int main(int argc,char **argv) {
   cudaDeviceProp props{};
   if ((err = cudaGetDeviceProperties(&props, device)) != cudaSuccess) { fprintf(stderr,"cudaGetDeviceProperties failed: %s\n", cudaGetErrorString(err)); return 4; }
   fprintf(stderr,"CUDA device %d: %s (compute %d.%d)\n", device, props.name, props.major, props.minor);
-  unsigned long long *dfound,*dcount;
-  if ((err = cudaMalloc(&dfound,8)) != cudaSuccess || (err = cudaMalloc(&dcount,8)) != cudaSuccess) {
+  unsigned long long *dfound,*dcount; unsigned int *dbestBits;
+  if ((err = cudaMalloc(&dfound,8)) != cudaSuccess || (err = cudaMalloc(&dcount,8)) != cudaSuccess || (err = cudaMalloc(&dbestBits,4)) != cudaSuccess) {
     fprintf(stderr,"cudaMalloc failed: %s\n", cudaGetErrorString(err)); return 5;
   }
-  unsigned long long missing=0xffffffffffffffffULL, zero=0;
-  cudaMemcpy(dfound,&missing,8,cudaMemcpyHostToDevice); cudaMemcpy(dcount,&zero,8,cudaMemcpyHostToDevice);
+  unsigned long long missing=0xffffffffffffffffULL, zero=0; unsigned int bestBits=0;
+  cudaMemcpy(dfound,&missing,8,cudaMemcpyHostToDevice); cudaMemcpy(dcount,&zero,8,cudaMemcpyHostToDevice); cudaMemcpy(dbestBits,&bestBits,4,cudaMemcpyHostToDevice);
   const int threads=256, blocks=4096; const uint64_t batch=(uint64_t)threads*blocks;
   while (true) {
-    mine_kernel<<<blocks,threads>>>(job,dfound,dcount);
+    cudaMemset(dcount,0,8);
+    mine_kernel<<<blocks,threads>>>(job,dfound,dcount,dbestBits);
     if ((err = cudaGetLastError()) != cudaSuccess || (err = cudaDeviceSynchronize()) != cudaSuccess) { fprintf(stderr,"CUDA kernel failed: %s\n", cudaGetErrorString(err)); return 6; }
     unsigned long long found; cudaMemcpy(&found,dfound,8,cudaMemcpyDeviceToHost);
-    unsigned long long count; cudaMemcpy(&count,dcount,8,cudaMemcpyDeviceToHost);
+    unsigned long long count; unsigned int deviceBest; cudaMemcpy(&count,dcount,8,cudaMemcpyDeviceToHost); cudaMemcpy(&deviceBest,dbestBits,4,cudaMemcpyDeviceToHost);
     if(found!=missing){printf("FOUND %llu\n",found); fflush(stdout); printf("HASHES %llu\n",count); fflush(stdout); break;}
-    printf("PROGRESS %llu\n",count); fflush(stdout);
+    printf("PROGRESS %llu %u\n",count,deviceBest); fflush(stdout);
     job.start += batch * job.stride;
   }
-  cudaFree(dfound);cudaFree(dcount); return 0;
+  cudaFree(dfound);cudaFree(dcount);cudaFree(dbestBits); return 0;
 }
