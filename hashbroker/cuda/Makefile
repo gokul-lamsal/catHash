@@ -14,7 +14,7 @@ endif
 GENCODE := $(foreach arch,$(GPU_ARCHES),-gencode arch=compute_$(arch),code=sm_$(arch))
 else
 ARCH_NUM := $(shell echo $(NVCC_ARCH) | sed 's/[^0-9]//g')
-GENCODE := -gencode arch=compute_$(ARCH_NUM),code=$(NVCC_ARCH)
+GENCODE := -gencode arch=compute_$(ARCH_NUM),code=sm_$(ARCH_NUM)
 endif
 
 $(TARGET): hashbroker_cuda.cu
