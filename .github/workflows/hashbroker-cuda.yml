@@ -6,8 +6,8 @@ on:
     paths:
       - "hashbroker/**"
       - ".github/workflows/hashbroker-cuda.yml"
-  tags:
-    - "hashbroker-v*"
+    tags:
+      - "hashbroker-v*"
 
 jobs:
   build:
