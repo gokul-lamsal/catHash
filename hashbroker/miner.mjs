@@ -159,8 +159,15 @@ async function mineRound() {
 
 function mineCudaRound({ diff, challengeHex, price }) {
   return new Promise((resolve, reject) => {
-    const children = []; let total = 0n; let lastTotal = 0n; let best = 0; let last = Date.now(); let lastLog = 0; let settled = false;
-    const finish = (value, error) => { if (settled) return; settled = true; stopCuda(); error ? reject(error) : resolve(value); };
+    const children = []; let total = 0n; let lastTotal = 0n; let best = 0; let last = Date.now(); let settled = false;
+    const report = () => {
+      const now = Date.now(); const seconds = Math.max((now - last) / 1000, 0.1); const delta = total - lastTotal;
+      const speed = Number(delta) / seconds; lastTotal = total; last = now;
+      const probability = 2 ** -diff; const chance = (1 - Math.exp(-Math.max(speed, 1) * 60 * probability)) * 100;
+      log("INFO", "mining", { mode: "CUDA", GPUs: gpus.length, speed: rate(Math.max(speed, 0)), hashes: total.toString(), best: `${best}/${diff} bits`, expected: duration(1 / (Math.max(speed, 1) * probability)), chancePerMinute: chance < 0.01 ? "<0.01%" : `${chance.toFixed(2)}%` });
+    };
+    const timer = setInterval(report, 1000);
+    const finish = (value, error) => { if (settled) return; settled = true; clearInterval(timer); stopCuda(); error ? reject(error) : resolve(value); };
     for (let i = 0; i < gpus.length; i++) {
       const gpu = gpus[i]; const child = spawn(cudaBinary, [String(gpu.index), String(diff), String(i), String(gpus.length)], { stdio: ["pipe", "pipe", "pipe"] });
       children.push(child); activeCuda.push(child); let output = "";
@@ -173,10 +180,6 @@ function mineCudaRound({ diff, challengeHex, price }) {
             let count; try { count = BigInt(value); } catch { continue; }
             total += count;
             const reportedBest = Number(bestValue); if (Number.isInteger(reportedBest)) best = Math.max(best, reportedBest);
-            const now = Date.now(); if (now - lastLog < 1000) continue;
-            const seconds = Math.max((now - last) / 1000, 0.1); const delta = total - lastTotal; const speed = Number(delta) / seconds; lastTotal = total; last = now; lastLog = now;
-            const probability = 2 ** -diff; const chance = (1 - Math.exp(-Math.max(speed, 1) * 60 * probability)) * 100;
-            log("INFO", "mining", { mode: "CUDA", speed: rate(Math.max(speed, 0)), hashes: total.toString(), best: `${best}/${diff} bits`, expected: duration(1 / (Math.max(speed, 1) * probability)), chancePerMinute: chance < 0.01 ? "<0.01%" : `${chance.toFixed(2)}%` });
           } else if (kind === "FOUND") {
             const nonce = value; const hash = hashProof(wallet.address, nonce, challengeHex).toString("hex"); finish({ nonce, hash, challenge: challengeHex, price });
           }
