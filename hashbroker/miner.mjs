@@ -182,7 +182,7 @@ function mineCudaRound({ diff, challengeHex, price }) {
       });
       child.stderr.setEncoding("utf8"); child.stderr.on("data", (data) => { if (data.trim()) log("ERROR", "CUDA device error", { gpu: gpu.index, error: data.trim() }); });
       child.on("error", (error) => finish(null, error));
-      child.on("close", (code) => { if (!settled && code !== 0) finish(null, new Error(`CUDA worker ${gpu.index} exited with code ${code}`)); });
+      child.on("close", (code, signal) => { if (!settled && code !== 0) finish(null, new Error(`CUDA worker ${gpu.index} exited with code ${code}${signal ? ` signal=${signal}` : ""}`)); });
     }
   });
 }
