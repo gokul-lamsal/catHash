@@ -20,7 +20,7 @@ jobs:
             -v "$PWD/hashbroker:/src" \
             -w /src \
             nvidia/cuda:12.4.1-devel-ubuntu22.04 \
-            bash -lc 'make -C cuda NVCC_ARCH=75'
+            bash -lc 'make -C cuda NVCC_ARCH=all'
       - name: Package worker
         run: tar -czf hashbroker-cuda-linux-x86_64.tar.gz -C hashbroker cuda/hashbroker_cuda miner.mjs package.json README.md
       - uses: actions/upload-artifact@v4

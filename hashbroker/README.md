@@ -13,7 +13,13 @@ npm install
 make -C cuda
 ```
 
-If compiling on a machine without a GPU, it uses `sm_75` as a portable fallback. You can override it with a supported architecture such as:
+If compiling on a machine without a GPU, it builds common CUDA 12.4 targets automatically. The GitHub release uses this multi-architecture build, so the downloaded binary can select the correct code for each detected GPU:
+
+```bash
+NVCC_ARCH=all make -C cuda
+```
+
+For a local build, you can still override detection with one architecture:
 
 ```bash
 NVCC_ARCH=89 make -C cuda
