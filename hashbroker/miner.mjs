@@ -174,7 +174,7 @@ function mineCudaRound({ diff, challengeHex, price }) {
             total += count - (child.lastCount ?? 0); child.lastCount = count;
             const now = Date.now(); const seconds = Math.max((now - last) / 1000, 0.1); const speed = (total - lastTotal) / seconds; lastTotal = total; last = now;
             const probability = 2 ** -diff; const chance = (1 - Math.exp(-Math.max(speed, 1) * 60 * probability)) * 100;
-            log("INFO", "mining", { mode: "CUDA", gpu: `${gpu.index}:${gpu.name}`, speed: rate(Math.max(speed, 0)), hashes: total, best: `${best}/${diff} bits`, hash: bestHash ? `0x${bestHash.slice(0, 16)}...` : "-", expected: duration(1 / (Math.max(speed, 1) * probability)), chancePerMinute: chance < 0.01 ? "<0.01%" : `${chance.toFixed(2)}%` });
+            log("INFO", "mining", { mode: "CUDA", speed: rate(Math.max(speed, 0)), hashes: total, best: `${best}/${diff} bits`, hash: bestHash ? `0x${bestHash.slice(0, 16)}...` : "-", expected: duration(1 / (Math.max(speed, 1) * probability)), chancePerMinute: chance < 0.01 ? "<0.01%" : `${chance.toFixed(2)}%` });
           } else if (kind === "FOUND") {
             const nonce = value; const hash = hashProof(wallet.address, nonce, challengeHex).toString("hex"); finish({ nonce, hash, challenge: challengeHex, price });
           }
