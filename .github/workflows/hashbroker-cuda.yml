@@ -1,0 +1,35 @@
+name: Hashbroker CUDA worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "hashbroker/**"
+      - ".github/workflows/hashbroker-cuda.yml"
+  tags:
+    - "hashbroker-v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with CUDA toolkit
+        run: |
+          docker run --rm \
+            -v "$PWD/hashbroker:/src" \
+            -w /src \
+            nvidia/cuda:12.4.1-devel-ubuntu22.04 \
+            bash -lc 'make -C cuda NVCC_ARCH=75'
+      - name: Package worker
+        run: tar -czf hashbroker-cuda-linux-x86_64.tar.gz -C hashbroker cuda/hashbroker_cuda miner.mjs package.json README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hashbroker-cuda-linux-x86_64
+          path: hashbroker-cuda-linux-x86_64.tar.gz
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/hashbroker-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: hashbroker-cuda-linux-x86_64.tar.gz
+          generate_release_notes: true

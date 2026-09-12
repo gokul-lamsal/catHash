@@ -1,0 +1,8 @@
+{
+  "name": "hashbroker-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node miner.mjs", "cuda:build": "make -C cuda" },
+  "dependencies": { "ethers": "^6.15.0" }
+}
