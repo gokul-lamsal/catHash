@@ -134,9 +134,15 @@ def mine(ch_hex, diff, check_stale):
 
 def submit(nonce, ch_hex, price_wei):
     data = SEL_MINE + f"{nonce:064x}" + ch_hex[2:]
+    latest = rpc("eth_getBlockByNumber", ["latest", False])
+    base_fee = int(latest.get("baseFeePerGas", "0x0"), 16)
+    priority_fee = int(os.environ.get("HASHBROKER_PRIORITY_FEE_WEI", "2000000"))
+    max_fee = base_fee * 2 + priority_fee
     tx = {"nonce": int(rpc("eth_getTransactionCount", [ADDR, "pending"]), 16),
           "to": CONTRACT, "value": price_wei, "gas": 250000,
-          "gasPrice": int(rpc("eth_gasPrice", []), 16), "data": data, "chainId": CHAIN_ID}
+          "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee,
+          "data": data, "chainId": CHAIN_ID, "type": 2}
+    print(f"  signing paid transaction value={price_wei} maxFeePerGas={max_fee} priorityFee={priority_fee}", flush=True)
     signed = acct.sign_transaction(tx)
     h = rpc("eth_sendRawTransaction", ["0x"+signed.raw_transaction.hex()])
     for _ in range(40):
