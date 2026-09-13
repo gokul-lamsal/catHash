@@ -51,14 +51,10 @@ def difficulty():  return int(call(SEL_DIFFICULTY), 16)
 def mint_price():  return int(call(SEL_PRICE), 16)
 
 # ---- OpenCL 挖矿 (NVIDIA) ----
-dev = None
-for p in cl.get_platforms():
-    if "NVIDIA" in p.name: dev = p.get_devices()[0]; break
-if dev is None:
-    devs = [d for pl in cl.get_platforms() for d in pl.get_devices()]
-    dev = devs[0]
-ctx = cl.Context([dev]); q = cl.CommandQueue(ctx)
-print(f"GPU: {dev.name} ({dev.max_compute_units} CU)  wallet: {ADDR}", flush=True)
+devs = [d for p in cl.get_platforms() if "NVIDIA" in p.name for d in p.get_devices()]
+if not devs: devs = [d for p in cl.get_platforms() for d in p.get_devices()]
+if not devs: sys.exit("No OpenCL GPU devices found")
+print(f"GPUs: {len(devs)}  wallet: {ADDR}", flush=True)
 
 KERNEL = r"""
 __constant uint K[64]={0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
@@ -98,25 +94,35 @@ def mine(ch_hex, diff, check_stale):
                 C0=ch_w[0],C1=ch_w[1],C2=ch_w[2],C3=ch_w[3],C4=ch_w[4],C5=ch_w[5],C6=ch_w[6],C7=ch_w[7])
     src = KERNEL
     for k,v in defs.items(): src = src.replace(k, f"{v}u" if k in ("A0","A1","A2","A3","A4","C0","C1","C2","C3","C4","C5","C6","C7") else str(v))
-    prg = cl.Program(ctx, src).build()
-    mf = cl.mem_flags
-    found = np.zeros(1, np.int32); out = np.zeros(1, np.uint64)
-    fg = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=found)
-    og = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=out)
-    GLOBAL = 1<<20; per = GLOBAL*ITERS
-    base = int.from_bytes(os.urandom(6), "big")
-    t0=time.time(); tot=0; last=t0; lastchk=t0
-    while True:
-        prg.mine(q, (GLOBAL,), None, np.uint64(base), fg, og); q.finish()
-        cl.enqueue_copy(q, found, fg); tot+=per; base=(base+per)&((1<<64)-1)
-        now=time.time()
-        if found[0]:
-            cl.enqueue_copy(q, out, og); q.finish(); return int(out[0])
-        if now-last>=5:
-            print(f"  {tot/(now-t0)/1e9:.1f} GH/s  best-effort mining diff {diff}…", flush=True); last=now
-        if now-lastchk>=12 and check_stale():   # challenge 变了 -> 重挖
-            return None
-        lastchk = now
+    def worker(dev, index, stop, result, stats):
+        ctx = cl.Context([dev]); q = cl.CommandQueue(ctx)
+        prg = cl.Program(ctx, src).build(); kernel = cl.Kernel(prg, "mine")
+        mf = cl.mem_flags; found = np.zeros(1, np.int32); out = np.zeros(1, np.uint64)
+        fg = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=found); og = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=out)
+        GLOBAL = 1<<20; per = GLOBAL*ITERS; base = (int.from_bytes(os.urandom(6), "big") + index) & ((1<<64)-1)
+        while not stop.is_set():
+            kernel(q, (GLOBAL,), None, np.uint64(base), fg, og); q.finish()
+            cl.enqueue_copy(q, found, fg); q.finish(); stats[index] = stats.get(index, 0) + per
+            if found[0]:
+                cl.enqueue_copy(q, out, og); q.finish(); result.put(int(out[0])); stop.set(); return
+            base = (base + per * len(devs)) & ((1<<64)-1)
+
+    stop = threading.Event(); result = queue.Queue(); stats = {}
+    threads = [threading.Thread(target=worker, args=(dev, i, stop, result, stats), daemon=True) for i, dev in enumerate(devs)]
+    for thread in threads: thread.start()
+    started = last_time = time.time(); last_total = 0
+    try:
+        while any(thread.is_alive() for thread in threads):
+            time.sleep(5); total = sum(stats.values()); now = time.time()
+            speed = (total-last_total) / max(now-last_time, 0.1); last_total, last_time = total, now
+            expected = 1 / max(speed * 2**-diff, 1); chance = (1 - (1 - 2**-diff) ** (max(speed, 1)*60)) * 100
+            print(f"  GPUs {len(devs)}  {speed/1e9:.2f} GH/s  hashes {total}  expected {expected:.1f}s  chance/min {chance:.2f}%", flush=True)
+            if check_stale(): stop.set(); break
+        try: return result.get_nowait()
+        except queue.Empty: return None
+    finally:
+        stop.set()
+        for thread in threads: thread.join(timeout=2)
 
 def submit(nonce, ch_hex, price_wei):
     data = SEL_MINE + f"{nonce:064x}" + ch_hex[2:]
