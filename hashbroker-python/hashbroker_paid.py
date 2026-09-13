@@ -13,7 +13,7 @@
 #        挖到后先验 challenge 未过期再提交(否则会被抢先/revert)。
 #  ⚠️ 竞争: 难度随全局供应上涨, 算力要压过 challenge 刷新率才稳中。单卡靠运气窗口。
 # ============================================================================
-import os, sys, time, json, struct, urllib.request, threading, queue
+import os, sys, time, json, struct, urllib.request, urllib.error, threading, queue, socket
 import numpy as np
 import pyopencl as cl
 from eth_account import Account
@@ -35,13 +35,26 @@ ADDR = acct.address
 COUNT = int(os.environ.get("COUNT", "999"))
 MAX_PRICE_WEI = int(os.environ.get("HASHBROKER_MAX_PRICE_WEI", "0"))
 
+# Some VPS networks advertise IPv6 while not routing it. Prefer IPv4 for RPC.
+_getaddrinfo = socket.getaddrinfo
+def _ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+    return [item for item in _getaddrinfo(host, port, family, type, proto, flags) if item[0] == socket.AF_INET]
+socket.getaddrinfo = _ipv4_only
+
 def rpc(method, params):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     # 注意: 很多 RPC 不带 User-Agent 会 403, 必须带上
     req = urllib.request.Request(RPC, data=body, headers={"content-type": "application/json", "user-agent": "Mozilla/5.0"})
-    r = json.loads(urllib.request.urlopen(req, timeout=20).read())
-    if "error" in r: raise RuntimeError(r["error"])
-    return r["result"]
+    last_error = None
+    for attempt in range(4):
+        try:
+            r = json.loads(urllib.request.urlopen(req, timeout=20).read())
+            if "error" in r: raise RuntimeError(r["error"])
+            return r["result"]
+        except (OSError, urllib.error.URLError, RuntimeError) as error:
+            last_error = error
+            if attempt < 3: time.sleep(1 + attempt)
+    raise last_error
 
 def call(data):
     return rpc("eth_call", [{"to": CONTRACT, "data": data}, "latest"])
@@ -125,7 +138,10 @@ def mine(ch_hex, diff, check_stale):
             else: wait = f"{expected/86400:.1f}d"
             best_bits = max((value for key, value in stats.items() if isinstance(key, tuple) and key[1] == "best"), default=0)
             print(f"  GPUs {len(devs)}  {speed/1e9:.2f} GH/s  hashes {total}  best {best_bits}/{diff} bits  expected {wait}  chance/min {chance:.2f}%", flush=True)
-            if check_stale(): stop.set(); break
+            try:
+                if check_stale(): stop.set(); break
+            except Exception as error:
+                print(f"  RPC check failed ({error}); continuing current challenge", flush=True)
         try: return result.get_nowait()
         except queue.Empty: return None
     finally:
