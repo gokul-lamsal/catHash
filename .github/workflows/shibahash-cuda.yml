@@ -1,0 +1,53 @@
+name: ShibaHash CUDA release
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "shibahash/**"
+      - ".github/workflows/shibahash-cuda.yml"
+    tags:
+      - "shibahash-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build CUDA worker and Rust CLI
+        run: |
+          docker run --rm \
+            -v "$PWD/shibahash:/src" \
+            -w /src \
+            nvidia/cuda:12.8.1-devel-ubuntu22.04 \
+            bash -lc '
+              apt-get update -qq && apt-get install -y -qq curl build-essential pkg-config libssl-dev >/dev/null &&
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal &&
+              . "$HOME/.cargo/env" &&
+              make -C cuda &&
+              cargo build --release
+            '
+
+      - name: Package Linux release
+        run: |
+          mkdir -p release
+          cp shibahash/target/release/shibahash-miner release/
+          cp shibahash/cuda/shibahash_cuda release/
+          cp shibahash/README.md release/
+          tar -czf shibahash-cuda-linux-x86_64.tar.gz -C release .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shibahash-cuda-linux-x86_64
+          path: shibahash-cuda-linux-x86_64.tar.gz
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/shibahash-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: shibahash-cuda-linux-x86_64.tar.gz
+          generate_release_notes: true
