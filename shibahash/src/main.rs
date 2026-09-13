@@ -7,7 +7,12 @@ use ethers::{
     types::{Address, U256},
 };
 use std::{env, process::Stdio, sync::Arc};
-use tokio::{io::AsyncWriteExt, process::Command, task::JoinSet};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::Command,
+    sync::mpsc,
+    task::JoinSet,
+};
 
 const RPC: &str = "https://rpc.mainnet.chain.robinhood.com";
 const CONTRACT: &str = "0xF46A1d2eDDD1004B1345F3D0B5A2Db8e28939c67";
@@ -33,6 +38,89 @@ fn gpu_count() -> usize {
 
 fn u256_hex(value: U256) -> String {
     format!("{value:064x}")
+}
+
+fn format_duration(seconds: f64) -> String {
+    if !seconds.is_finite() {
+        return "—".into();
+    }
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else if seconds < 3600.0 {
+        format!("{:.1}m", seconds / 60.0)
+    } else if seconds < 86_400.0 {
+        format!("{:.1}h", seconds / 3600.0)
+    } else {
+        format!("{:.1}d", seconds / 86_400.0)
+    }
+}
+
+enum WorkerEvent {
+    Progress { gpu: usize, hashes: u64 },
+    Found { gpu: usize, nonce: U256 },
+    Error { gpu: usize, message: String },
+}
+
+async fn run_worker(
+    gpu: usize,
+    devices: usize,
+    bin: String,
+    encoded: String,
+    target_hex: String,
+    tx: mpsc::UnboundedSender<WorkerEvent>,
+) {
+    let result: Result<()> = async {
+        let mut child = Command::new(bin)
+            .args([
+                gpu.to_string(),
+                gpu.to_string(),
+                devices.to_string(),
+                target_hex,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .with_context(|| format!("start CUDA worker {gpu}"))?;
+        child
+            .stdin
+            .take()
+            .context("CUDA worker stdin unavailable")?
+            .write_all(encoded.as_bytes())
+            .await?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("CUDA worker stdout unavailable")?;
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(line) = lines.next_line().await? {
+            if let Some(value) = line.strip_prefix("PROGRESS ") {
+                if let Ok(hashes) = value.trim().parse::<u64>() {
+                    let _ = tx.send(WorkerEvent::Progress { gpu, hashes });
+                }
+            } else if let Some(value) = line.strip_prefix("FOUND ") {
+                let nonce = value.trim().parse::<U256>()?;
+                let _ = tx.send(WorkerEvent::Found { gpu, nonce });
+                return Ok(());
+            }
+        }
+        let status = child.wait().await?;
+        if !status.success() {
+            let _ = tx.send(WorkerEvent::Error {
+                gpu,
+                message: format!("worker exited with {status}"),
+            });
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        let _ = tx.send(WorkerEvent::Error {
+            gpu,
+            message: error.to_string(),
+        });
+    }
 }
 
 #[tokio::main]
@@ -71,56 +159,59 @@ async fn main() -> Result<()> {
         let encoded = hex::encode(prefix);
         let target_hex = u256_hex(target);
 
+        let started = std::time::Instant::now();
+        let (tx, mut rx) = mpsc::unbounded_channel();
         let mut workers = JoinSet::new();
         for gpu in 0..devices {
-            let bin = bin.clone();
-            let encoded = encoded.clone();
-            let target_hex = target_hex.clone();
-            workers.spawn(async move {
-                let mut child = Command::new(bin)
-                    .args([
-                        gpu.to_string(),
-                        gpu.to_string(),
-                        devices.to_string(),
-                        target_hex.clone(),
-                    ])
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn()
-                    .with_context(|| format!("start CUDA worker {gpu}"))?;
-                child
-                    .stdin
-                    .take()
-                    .unwrap()
-                    .write_all(encoded.as_bytes())
-                    .await?;
-                let output = child.wait_with_output().await?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let nonce = stdout
-                    .lines()
-                    .find(|line| line.starts_with("FOUND "))
-                    .map(|line| line[6..].trim().parse::<U256>())
-                    .transpose()?;
-                if nonce.is_none() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.trim().is_empty() {
-                        eprintln!("CUDA worker {gpu} error: {}", stderr.trim());
-                    }
-                }
-                Ok::<Option<U256>, anyhow::Error>(nonce)
-            });
+            let worker_tx = tx.clone();
+            workers.spawn(run_worker(
+                gpu,
+                devices,
+                bin.clone(),
+                encoded.clone(),
+                target_hex.clone(),
+                worker_tx,
+            ));
         }
 
         let mut found = None;
-        while let Some(result) = workers.join_next().await {
-            if let Some(nonce) = result?? {
-                found = Some(nonce);
-                workers.abort_all();
-                break;
+        let mut per_gpu = vec![0u64; devices];
+        while let Some(event) = rx.recv().await {
+            match event {
+                WorkerEvent::Progress { gpu, hashes } => {
+                    per_gpu[gpu] = hashes;
+                    let total: u64 = per_gpu.iter().sum();
+                    let elapsed = started.elapsed().as_secs_f64().max(0.001);
+                    let speed = total as f64 / elapsed;
+                    let target_ratio =
+                        target.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(256);
+                    let expected = if speed > 0.0 && target_ratio > 0.0 {
+                        1.0 / (speed * target_ratio)
+                    } else {
+                        f64::INFINITY
+                    };
+                    let chance = 1.0 - (-speed * 60.0 * target_ratio).exp();
+                    println!(
+                        "mining GPUs={} speed={:.2} MH/s hashes={} expected={} chance/min={:.2}%",
+                        devices,
+                        speed / 1_000_000.0,
+                        total,
+                        format_duration(expected),
+                        chance * 100.0
+                    );
+                }
+                WorkerEvent::Found { gpu, nonce } => {
+                    println!("CUDA GPU {gpu} found candidate nonce={nonce}");
+                    found = Some(nonce);
+                    workers.abort_all();
+                    break;
+                }
+                WorkerEvent::Error { gpu, message } => {
+                    eprintln!("CUDA worker {gpu} error: {message}");
+                }
             }
         }
+        while workers.join_next().await.is_some() {}
 
         let Some(nonce) = found else {
             println!("all CUDA workers stopped; refreshing challenge");
