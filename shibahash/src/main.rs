@@ -138,10 +138,8 @@ async fn main() -> Result<()> {
             );
             continue;
         }
-        let (fresh_anchor_block, fresh_anchor): (U256, [u8; 32]) = contract
-            .method("currentAnchor", ())?
-            .call()
-            .await?;
+        let (fresh_anchor_block, fresh_anchor): (U256, [u8; 32]) =
+            contract.method("currentAnchor", ())?.call().await?;
         let fresh_prev: [u8; 32] = contract.method("prevWork", ())?.call().await?;
         let fresh_target: U256 = contract.method("targetFor", address)?.call().await?;
         if fresh_anchor_block != anchor_block || fresh_anchor != anchor || fresh_prev != prev {
