@@ -1,6 +1,6 @@
 # Hashbroker CLI Miner
 
-Standalone Linux miner for Hash Broker on Robinhood Chain. It reads the current on-chain challenge, hashes with all detected NVIDIA GPUs through a native CUDA worker, signs the `mine(uint256,bytes32)` transaction locally, broadcasts it, and repeats after confirmation. If CUDA is unavailable, it falls back to CPU workers.
+Standalone Linux miner for Hash Broker on Robinhood Chain. It reads the current on-chain challenge, hashes with all detected NVIDIA GPUs through a native CUDA worker, signs the `mine(uint256,bytes32)` transaction locally, includes the current `mintPrice()` as transaction value when non-zero, broadcasts it, and repeats after confirmation. If CUDA is unavailable, it falls back to CPU workers.
 
 This project does not use Chromium. Standard ASIC miners are not compatible with this protocol because each job is tied to an address and challenge and a successful result must be submitted as a wallet transaction.
 
@@ -42,5 +42,13 @@ Use fewer workers if needed:
 ```bash
 node miner.mjs --workers 4
 ```
+
+Paid minting is enabled by default. To impose a maximum price in wei:
+
+```bash
+node miner.mjs --max-price-wei 100000000000000
+```
+
+The miner logs `payment=free` or `payment=PAID`, checks the live price before mining, rechecks the challenge before submission, and signs the paid transaction with the configured wallet.
 
 The private key is never printed. Never put it in source control.

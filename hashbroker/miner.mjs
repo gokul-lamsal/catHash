@@ -98,6 +98,8 @@ if (!isMainThread) {
 const args = process.argv.slice(2);
 const argValue = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const workersRequested = Number(argValue("--workers") ?? cpus().length);
+const maxPriceArg = argValue("--max-price-wei");
+const maxPriceWei = maxPriceArg === undefined ? null : BigInt(maxPriceArg);
 const key = process.env.HASHBROKER_PRIVATE_KEY;
 if (!key) { log("ERROR", "HASHBROKER_PRIVATE_KEY is not set"); process.exit(2); }
 
@@ -125,8 +127,11 @@ async function mineRound() {
   ]);
   const diff = Number(difficulty);
   const challengeHex = String(challenge);
+  if (maxPriceWei !== null && price > maxPriceWei) {
+    throw new Error(`mint price ${price} wei exceeds --max-price-wei ${maxPriceWei} wei`);
+  }
   const workerCount = Math.max(1, Math.min(workersRequested, 256));
-  log("INFO", "new challenge", { supply: supply.toString(), difficulty: `${diff} bits`, priceWei: price.toString(), challenge: challengeHex });
+  log("INFO", "new challenge", { supply: supply.toString(), difficulty: `${diff} bits`, priceWei: price.toString(), payment: price === 0n ? "free" : "PAID", challenge: challengeHex });
   const useCuda = gpus.length > 0 && existsSync(cudaBinary);
   log("INFO", "mining", { mode: useCuda ? "CUDA" : "CPU", devices: useCuda ? gpus.length : Math.max(1, Math.min(workersRequested, 256)), expected: "calculating", chancePerMinute: "calculating" });
 
