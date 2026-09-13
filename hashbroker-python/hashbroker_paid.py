@@ -74,7 +74,7 @@ void blk(uint* h,const uint* in){uint w[64];for(int i=0;i<16;i++)w[i]=in[i];
  uint a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],hh=h[7];
  for(int i=0;i<64;i++){uint t1=hh+S1(e)+((e&f)^(~e&g))+K[i]+w[i];uint t2=S0(a)+((a&b)^(a&c)^(b&c));hh=g;g=f;f=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;}
  h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;h[5]+=f;h[6]+=g;h[7]+=hh;}
-__kernel void mine(ulong base,__global volatile int* found,__global ulong* out){
+__kernel void mine(ulong base,__global volatile int* found,__global ulong* out,__global volatile uint* best){
  ulong nb=base+(ulong)get_global_id(0)*ITERS;
  for(uint it=0;it<ITERS;it++){ if(*found)return; ulong nonce=nb+it;
   uint b1[16]={A0,A1,A2,A3,A4,0,0,0,0,0,0,(uint)(nonce>>32),(uint)(nonce&0xffffffffu),C0,C1,C2};
@@ -82,6 +82,7 @@ __kernel void mine(ulong base,__global volatile int* found,__global ulong* out){
   uint h[8]={0x6a09e667u,0xbb67ae85u,0x3c6ef372u,0xa54ff53au,0x510e527fu,0x9b05688cu,0x1f83d9abu,0x5be0cd19u};
   blk(h,b1);blk(h,b2);
   int lz=0;for(int i=0;i<8;i++){if(h[i]==0u)lz+=32;else{lz+=clz(h[i]);break;}}
+  atomic_max(best,(uint)lz);
   if(lz>=DIFF){if(atomic_cmpxchg(found,0,1)==0)*out=nonce;return;}}}
 """
 
@@ -97,12 +98,13 @@ def mine(ch_hex, diff, check_stale):
     def worker(dev, index, stop, result, stats):
         ctx = cl.Context([dev]); q = cl.CommandQueue(ctx)
         prg = cl.Program(ctx, src).build(); kernel = cl.Kernel(prg, "mine")
-        mf = cl.mem_flags; found = np.zeros(1, np.int32); out = np.zeros(1, np.uint64)
-        fg = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=found); og = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=out)
+        mf = cl.mem_flags; found = np.zeros(1, np.int32); out = np.zeros(1, np.uint64); best = np.zeros(1, np.uint32)
+        fg = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=found); og = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=out); bg = cl.Buffer(ctx, mf.READ_WRITE|mf.COPY_HOST_PTR, hostbuf=best)
         GLOBAL = 1<<20; per = GLOBAL*ITERS; base = (int.from_bytes(os.urandom(6), "big") + index) & ((1<<64)-1)
         while not stop.is_set():
-            kernel(q, (GLOBAL,), None, np.uint64(base), fg, og); q.finish()
+            kernel(q, (GLOBAL,), None, np.uint64(base), fg, og, bg); q.finish()
             cl.enqueue_copy(q, found, fg); q.finish(); stats[index] = stats.get(index, 0) + per
+            cl.enqueue_copy(q, best, bg); q.finish(); stats[(index, "best")] = max(stats.get((index, "best"), 0), int(best[0]))
             if found[0]:
                 cl.enqueue_copy(q, out, og); q.finish(); result.put(int(out[0])); stop.set(); return
             base = (base + per * len(devs)) & ((1<<64)-1)
@@ -121,7 +123,8 @@ def mine(ch_hex, diff, check_stale):
             elif expected < 3600: wait = f"{expected/60:.1f}m"
             elif expected < 86400: wait = f"{expected/3600:.1f}h"
             else: wait = f"{expected/86400:.1f}d"
-            print(f"  GPUs {len(devs)}  {speed/1e9:.2f} GH/s  hashes {total}  expected {wait}  chance/min {chance:.2f}%", flush=True)
+            best_bits = max((value for key, value in stats.items() if isinstance(key, tuple) and key[1] == "best"), default=0)
+            print(f"  GPUs {len(devs)}  {speed/1e9:.2f} GH/s  hashes {total}  best {best_bits}/{diff} bits  expected {wait}  chance/min {chance:.2f}%", flush=True)
             if check_stale(): stop.set(); break
         try: return result.get_nowait()
         except queue.Empty: return None
