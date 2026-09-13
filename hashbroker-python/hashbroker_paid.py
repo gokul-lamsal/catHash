@@ -13,7 +13,7 @@
 #        挖到后先验 challenge 未过期再提交(否则会被抢先/revert)。
 #  ⚠️ 竞争: 难度随全局供应上涨, 算力要压过 challenge 刷新率才稳中。单卡靠运气窗口。
 # ============================================================================
-import os, sys, time, json, struct, urllib.request
+import os, sys, time, json, struct, urllib.request, threading, queue
 import numpy as np
 import pyopencl as cl
 from eth_account import Account
