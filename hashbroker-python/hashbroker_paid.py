@@ -115,8 +115,13 @@ def mine(ch_hex, diff, check_stale):
         while any(thread.is_alive() for thread in threads):
             time.sleep(5); total = sum(stats.values()); now = time.time()
             speed = (total-last_total) / max(now-last_time, 0.1); last_total, last_time = total, now
-            expected = 1 / max(speed * 2**-diff, 1); chance = (1 - (1 - 2**-diff) ** (max(speed, 1)*60)) * 100
-            print(f"  GPUs {len(devs)}  {speed/1e9:.2f} GH/s  hashes {total}  expected {expected:.1f}s  chance/min {chance:.2f}%", flush=True)
+            expected = float("inf") if speed <= 0 else (2**diff) / speed
+            chance = (1 - (1 - 2**-diff) ** (max(speed, 0)*60)) * 100
+            if expected < 60: wait = f"{expected:.1f}s"
+            elif expected < 3600: wait = f"{expected/60:.1f}m"
+            elif expected < 86400: wait = f"{expected/3600:.1f}h"
+            else: wait = f"{expected/86400:.1f}d"
+            print(f"  GPUs {len(devs)}  {speed/1e9:.2f} GH/s  hashes {total}  expected {wait}  chance/min {chance:.2f}%", flush=True)
             if check_stale(): stop.set(); break
         try: return result.get_nowait()
         except queue.Empty: return None
