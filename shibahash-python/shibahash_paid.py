@@ -113,15 +113,18 @@ def main():
             fresh_block,fresh_anchor=c.functions.currentAnchor().call()
             fresh_prev=c.functions.prevWork().call()
             fresh_target=c.functions.targetFor(acct.address).call()
-            return (fresh_prev != prev or fresh_anchor != anchor or
-                    fresh_target != target or fresh_block-block >= MAX_ANCHOR_AGE)
+            # The anchor hash is allowed to age: the contract accepts a past
+            # anchor for up to 250 blocks. A target becoming easier also does
+            # not invalidate a proof found against the older, stricter target.
+            return (fresh_prev != prev or fresh_target < target or
+                    fresh_block-block >= MAX_ANCHOR_AGE)
         nonce=mine_round(devs,prefix,target,stale)
         if nonce is None: print("  challenge changed -> remine"); continue
         ok,h=cpu_verify(acct.address,nonce,prev,anchor,target)
         onchain=c.functions.workHash(acct.address,nonce,prev,anchor).call()
         if not ok or bytes(onchain)!=h: print(f"  invalid GPU result discarded nonce={nonce} hash=0x{h.hex()}"); continue
         fresh_block,fresh_anchor=c.functions.currentAnchor().call(); fresh_prev=c.functions.prevWork().call(); fresh_target=c.functions.targetFor(acct.address).call(); price=c.functions.mintPrice().call()
-        if fresh_prev != prev or fresh_anchor != anchor or fresh_target != target or fresh_block-block >= MAX_ANCHOR_AGE:
+        if fresh_prev != prev or fresh_target < target or fresh_block-block >= MAX_ANCHOR_AGE:
             print("  proof became stale before submit -> remine"); continue
         txfn=c.functions.mine(nonce,block); txfn.call({"from":acct.address,"value":price}); tx=txfn.build_transaction({"from":acct.address,"value":price,"nonce":w3.eth.get_transaction_count(acct.address,"pending"),"chainId":CHAIN_ID,"gas":w3.eth.estimate_gas({"from":acct.address,"to":CONTRACT,"value":price,"data":txfn._encode_transaction_data()})}); latest=w3.eth.get_block("latest"); tx.update({"type":2,"maxPriorityFeePerGas":int(os.getenv("SHIBAHASH_PRIORITY_FEE_WEI","2000000")),"maxFeePerGas":int(latest.get("baseFeePerGas",0))*2+int(os.getenv("SHIBAHASH_PRIORITY_FEE_WEI","2000000"))}); signed=acct.sign_transaction(tx); txh=w3.eth.send_raw_transaction(signed.raw_transaction); print(f"  signed and submitted tx={txh.hex()}"); receipt=w3.eth.wait_for_transaction_receipt(txh); print(f"  confirmed block={receipt.blockNumber} status={receipt.status}")
 
