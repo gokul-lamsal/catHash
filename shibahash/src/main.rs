@@ -15,6 +15,7 @@ const ABI: &str = r#"[
  {"inputs":[],"name":"currentAnchor","outputs":[{"name":"anchorBlock","type":"uint256"},{"name":"anchor","type":"bytes32"}],"stateMutability":"view","type":"function"},
  {"inputs":[],"name":"prevWork","outputs":[{"name":"","type":"bytes32"}],"stateMutability":"view","type":"function"},
  {"inputs":[{"name":"miner","type":"address"}],"name":"targetFor","outputs":[{"name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+ {"inputs":[{"name":"miner","type":"address"},{"name":"nonce","type":"uint256"},{"name":"prev","type":"bytes32"},{"name":"anchor","type":"bytes32"}],"name":"workHash","outputs":[{"name":"","type":"bytes32"}],"stateMutability":"pure","type":"function"},
  {"inputs":[],"name":"mintPrice","outputs":[{"name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
  {"inputs":[{"name":"nonce","type":"uint256"},{"name":"anchorBlock","type":"uint256"}],"name":"mine","outputs":[{"name":"tokenId","type":"uint256"}],"stateMutability":"payable","type":"function"}
 ]"#;
@@ -125,6 +126,32 @@ async fn main() -> Result<()> {
             println!("all CUDA workers stopped; refreshing challenge");
             continue;
         };
+        let work: ethers::types::H256 = contract
+            .method("workHash", (address, nonce, prev, anchor))?
+            .call()
+            .await?;
+        let work_value = U256::from_big_endian(work.as_bytes());
+        if work_value >= target {
+            eprintln!(
+                "discarding invalid CUDA result nonce={nonce} hash={work:?} target=0x{}",
+                u256_hex(target)
+            );
+            continue;
+        }
+        let (fresh_anchor_block, fresh_anchor): (U256, [u8; 32]) = contract
+            .method("currentAnchor", ())?
+            .call()
+            .await?;
+        let fresh_prev: [u8; 32] = contract.method("prevWork", ())?.call().await?;
+        let fresh_target: U256 = contract.method("targetFor", address)?.call().await?;
+        if fresh_anchor_block != anchor_block || fresh_anchor != anchor || fresh_prev != prev {
+            println!("challenge changed before submit; discarding nonce and restarting");
+            continue;
+        }
+        if work_value >= fresh_target {
+            println!("target changed before submit; discarding nonce and restarting");
+            continue;
+        }
         println!("FOUND nonce={nonce}; submitting paid mint...");
         let call = contract
             .method::<_, U256>("mine", (nonce, anchor_block))?
