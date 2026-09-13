@@ -176,12 +176,17 @@ async fn main() -> Result<()> {
 
         let mut found = None;
         let mut per_gpu = vec![0u64; devices];
+        let mut last_report = std::time::Instant::now();
         while let Some(event) = rx.recv().await {
             match event {
                 WorkerEvent::Progress { gpu, hashes } => {
-                    per_gpu[gpu] = hashes;
+                    per_gpu[gpu] = per_gpu[gpu].saturating_add(hashes);
                     let total: u64 = per_gpu.iter().sum();
                     let elapsed = started.elapsed().as_secs_f64().max(0.001);
+                    if last_report.elapsed().as_secs_f64() < 1.0 {
+                        continue;
+                    }
+                    last_report = std::time::Instant::now();
                     let speed = total as f64 / elapsed;
                     let target_ratio =
                         target.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(256);
