@@ -16,7 +16,9 @@ python3 shibahash_paid.py
 ```
 
 `SHIBAHASH_BATCH` and `SHIBAHASH_GLOBAL` can be lowered if the driver runs out
-of memory. The miner reads the official current anchor, target and mint price;
+of memory. `SHIBAHASH_MAX_ANCHOR_AGE` defaults to 230 blocks, below the
+contract's 250-block limit, and `SHIBAHASH_STALE_CHECK_SECONDS` defaults to 3.
+The miner reads the official current anchor, target and mint price;
 CPU-verifies and contract-verifies every candidate, simulates `mine()` before
 signing, and prints aggregate speed, hashes, best leading bits, expected time,
 chance per minute, transaction hash and receipt status.

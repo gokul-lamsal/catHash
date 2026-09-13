@@ -21,6 +21,8 @@ from web3.exceptions import ContractLogicError
 RPC = os.getenv("SHIBAHASH_RPC", "https://rpc.mainnet.chain.robinhood.com")
 CONTRACT = Web3.to_checksum_address("0xF46A1d2eDDD1004B1345F3D0B5A2Db8e28939c67")
 CHAIN_ID = 4663
+MAX_ANCHOR_AGE = int(os.getenv("SHIBAHASH_MAX_ANCHOR_AGE", "230"))
+STALE_CHECK_SECONDS = float(os.getenv("SHIBAHASH_STALE_CHECK_SECONDS", "3"))
 ABI = [
  {"inputs":[],"name":"currentAnchor","outputs":[{"type":"uint256"},{"type":"bytes32"}],"stateMutability":"view","type":"function"},
  {"inputs":[],"name":"prevWork","outputs":[{"type":"bytes32"}],"stateMutability":"view","type":"function"},
@@ -101,13 +103,27 @@ def main():
     w3=Web3(Web3.HTTPProvider(RPC,request_kwargs={"timeout":20})); acct=w3.eth.account.from_key(pk); c=w3.eth.contract(CONTRACT,abi=ABI); devs=devices(); print(f"ShibaHash Python OpenCL miner | address={acct.address} GPUs={len(devs)}")
     while True:
         block,anchor=c.functions.currentAnchor().call(); prev=c.functions.prevWork().call(); target=c.functions.targetFor(acct.address).call(); price=c.functions.mintPrice().call(); print(f"[{time.strftime('%H:%M:%S')}] challenge anchor={block} target=0x{target:064x} priceWei={price}")
-        prefix=make_prefix(acct.address,prev,anchor); stale=lambda: c.functions.prevWork().call()!=prev or c.functions.currentAnchor().call()[0]-block>=180
+        prefix=make_prefix(acct.address,prev,anchor)
+        last_stale_check=[0.0]
+        def stale():
+            now=time.time()
+            if now-last_stale_check[0] < STALE_CHECK_SECONDS:
+                return False
+            last_stale_check[0]=now
+            fresh_block,fresh_anchor=c.functions.currentAnchor().call()
+            fresh_prev=c.functions.prevWork().call()
+            fresh_target=c.functions.targetFor(acct.address).call()
+            return (fresh_prev != prev or fresh_anchor != anchor or
+                    fresh_target != target or fresh_block-block >= MAX_ANCHOR_AGE)
         nonce=mine_round(devs,prefix,target,stale)
         if nonce is None: print("  challenge changed -> remine"); continue
         ok,h=cpu_verify(acct.address,nonce,prev,anchor,target)
         onchain=c.functions.workHash(acct.address,nonce,prev,anchor).call()
         if not ok or bytes(onchain)!=h: print(f"  invalid GPU result discarded nonce={nonce} hash=0x{h.hex()}"); continue
-        price=c.functions.mintPrice().call(); txfn=c.functions.mine(nonce,block); txfn.call({"from":acct.address,"value":price}); tx=txfn.build_transaction({"from":acct.address,"value":price,"nonce":w3.eth.get_transaction_count(acct.address,"pending"),"chainId":CHAIN_ID,"gas":w3.eth.estimate_gas({"from":acct.address,"to":CONTRACT,"value":price,"data":txfn._encode_transaction_data()})}); latest=w3.eth.get_block("latest"); tx.update({"type":2,"maxPriorityFeePerGas":int(os.getenv("SHIBAHASH_PRIORITY_FEE_WEI","2000000")),"maxFeePerGas":int(latest.get("baseFeePerGas",0))*2+int(os.getenv("SHIBAHASH_PRIORITY_FEE_WEI","2000000"))}); signed=acct.sign_transaction(tx); txh=w3.eth.send_raw_transaction(signed.raw_transaction); print(f"  signed and submitted tx={txh.hex()}"); receipt=w3.eth.wait_for_transaction_receipt(txh); print(f"  confirmed block={receipt.blockNumber} status={receipt.status}")
+        fresh_block,fresh_anchor=c.functions.currentAnchor().call(); fresh_prev=c.functions.prevWork().call(); fresh_target=c.functions.targetFor(acct.address).call(); price=c.functions.mintPrice().call()
+        if fresh_prev != prev or fresh_anchor != anchor or fresh_target != target or fresh_block-block >= MAX_ANCHOR_AGE:
+            print("  proof became stale before submit -> remine"); continue
+        txfn=c.functions.mine(nonce,block); txfn.call({"from":acct.address,"value":price}); tx=txfn.build_transaction({"from":acct.address,"value":price,"nonce":w3.eth.get_transaction_count(acct.address,"pending"),"chainId":CHAIN_ID,"gas":w3.eth.estimate_gas({"from":acct.address,"to":CONTRACT,"value":price,"data":txfn._encode_transaction_data()})}); latest=w3.eth.get_block("latest"); tx.update({"type":2,"maxPriorityFeePerGas":int(os.getenv("SHIBAHASH_PRIORITY_FEE_WEI","2000000")),"maxFeePerGas":int(latest.get("baseFeePerGas",0))*2+int(os.getenv("SHIBAHASH_PRIORITY_FEE_WEI","2000000"))}); signed=acct.sign_transaction(tx); txh=w3.eth.send_raw_transaction(signed.raw_transaction); print(f"  signed and submitted tx={txh.hex()}"); receipt=w3.eth.wait_for_transaction_receipt(txh); print(f"  confirmed block={receipt.blockNumber} status={receipt.status}")
 
 if __name__=="__main__":
     try: main()
