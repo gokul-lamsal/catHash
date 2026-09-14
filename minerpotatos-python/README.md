@@ -23,7 +23,8 @@ clinfo | grep -E "Device Name|Device Type"
 ```bash
 export MINERPOTATOS_PRIVATE_KEY="0xYOUR_PRIVATE_KEY"
 export MINERPOTATOS_MAX_MINTS=10
-export MINERPOTATOS_GLOBAL=1048576
+export MINERPOTATOS_GLOBAL=4194304
+export MINERPOTATOS_LOCAL=256
 python3 -u minerpotatos_paid.py
 ```
 
@@ -37,5 +38,10 @@ export MINERPOTATOS_STALE_CHECK_SECONDS=3
 export MINERPOTATOS_ANCHOR_MARGIN=8
 export MINERPOTATOS_RPCS="https://rpc.minerpotatos.xyz,https://your-backup-rpc"
 ```
+
+The status line shows aggregate speed followed by each device's rate. For RTX
+5090 systems, start with `GLOBAL=4194304` and `LOCAL=256`. You can benchmark
+`LOCAL=128`, `256`, and `512`; both values must divide `GLOBAL` exactly. Compare
+rates only after kernel compilation and at least 10 seconds of mining.
 
 Keep the private key secret and fund its Robinhood Chain address with enough ETH for each current mint price plus gas.

@@ -5,24 +5,25 @@ import importlib.util
 import math
 import os
 from pathlib import Path
+import queue
+import random
+import threading
 import time
 
+import numpy as np
+import pyopencl as cl
 from Crypto.Hash import keccak
 from web3 import Web3
 
 
-# Reuse the tested Keccak/OpenCL runtime, but specialize its kernel for the
-# MinerPotatos 116-byte prefix and nonce position (bytes 84..115).
+# Reuse the tested OpenCL device discovery and display helpers.
 shared_path = Path(__file__).resolve().parents[1] / "prspct-python" / "prspct_paid.py"
 spec = importlib.util.spec_from_file_location("cathash_opencl", shared_path)
 gpu = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gpu)
-gpu.KERNEL = gpu.KERNEL.replace(
-    "for(int i=0;i<52;i++)m[i]=prefix[i];",
-    "for(int i=0;i<116;i++)m[i]=prefix[i];",
-).replace("m[83-i]", "m[115-i]")
-gpu.GLOBAL_SIZE = int(os.getenv("MINERPOTATOS_GLOBAL", str(1 << 20)))
-gpu.STALE_SECONDS = float(os.getenv("MINERPOTATOS_STALE_CHECK_SECONDS", "3"))
+GLOBAL_SIZE = int(os.getenv("MINERPOTATOS_GLOBAL", str(1 << 22)))
+LOCAL_SIZE = int(os.getenv("MINERPOTATOS_LOCAL", "256"))
+STALE_SECONDS = float(os.getenv("MINERPOTATOS_STALE_CHECK_SECONDS", "3"))
 
 CHAIN_ID = 4663
 CONTRACT = Web3.to_checksum_address("0xb0db77c5d6ed578189609ecc72d25699a79f785b")
@@ -34,6 +35,31 @@ MAX_MINTS = int(os.getenv("MINERPOTATOS_MAX_MINTS", "0"))
 PRIORITY_FEE = int(os.getenv("MINERPOTATOS_PRIORITY_FEE_WEI", "2000000"))
 ETH_USD = float(os.getenv("MINERPOTATOS_ETH_USD", "2500"))
 ANCHOR_MARGIN = int(os.getenv("MINERPOTATOS_ANCHOR_MARGIN", "8"))
+
+# This proof occupies exactly one Keccak-256 rate block. Lanes 0..12 are
+# invariant; lanes 13 and 14 contain the low 64-bit nonce. Constructing those
+# lanes directly avoids rebuilding and copying 136 private bytes for each hash.
+FAST_KERNEL = r"""
+__constant ulong RC[24]={1UL,0x8082UL,0x800000000000808aUL,0x8000000080008000UL,0x808bUL,0x80000001UL,0x8000000080008081UL,0x8000000000008009UL,0x8aUL,0x88UL,0x80008009UL,0x8000000aUL,0x8000808bUL,0x800000000000008bUL,0x8000000000008089UL,0x8000000000008003UL,0x8000000000008002UL,0x8000000000000080UL,0x800aUL,0x800000008000000aUL,0x8000000080008081UL,0x8000000000008080UL,0x80000001UL,0x8000000080008008UL};
+__constant int PI[24]={10,7,11,17,18,3,5,16,8,21,24,4,15,23,19,13,12,2,20,14,22,9,6,1};
+__constant int RH[24]={1,3,6,10,15,21,28,36,45,55,2,14,27,41,56,8,25,43,62,18,39,61,20,44};
+ulong rol(ulong x,int n){return (x<<n)|(x>>(64-n));}
+uint sw32(uint x){return ((x&0xffU)<<24)|((x&0xff00U)<<8)|((x>>8)&0xff00U)|(x>>24);}
+ulong sw64(ulong x){return ((ulong)sw32((uint)x)<<32)|(ulong)sw32((uint)(x>>32));}
+void perm(ulong a[25]){for(int r=0;r<24;r++){ulong c[5],d[5];for(int x=0;x<5;x++)c[x]=a[x]^a[x+5]^a[x+10]^a[x+15]^a[x+20];for(int x=0;x<5;x++)d[x]=c[(x+4)%5]^rol(c[(x+1)%5],1);for(int i=0;i<25;i++)a[i]^=d[i%5];ulong t=a[1],u;for(int i=0;i<24;i++){u=a[PI[i]];a[PI[i]]=rol(t,RH[i]);t=u;}for(int y=0;y<5;y++){ulong b0=a[5*y],b1=a[1+5*y],b2=a[2+5*y],b3=a[3+5*y],b4=a[4+5*y];a[5*y]=b0^((~b1)&b2);a[1+5*y]=b1^((~b2)&b3);a[2+5*y]=b2^((~b3)&b4);a[3+5*y]=b3^((~b4)&b0);a[4+5*y]=b4^((~b0)&b1);}a[0]^=RC[r];}}
+__kernel void mine(__global const ulong* base_state,__global const ulong* target,ulong base,volatile __global uint* found,__global ulong* nonce,__global uint* bestbits){
+ ulong n=base+(ulong)get_global_id(0); ulong a[25];
+ for(int i=0;i<13;i++)a[i]=base_state[i];
+ a[13]=((ulong)sw32((uint)(n>>32)))<<32;
+ a[14]=(ulong)sw32((uint)n)|0x0000000100000000UL;
+ a[15]=0UL;a[16]=0x8000000000000000UL;for(int i=17;i<25;i++)a[i]=0UL;
+ perm(a);
+ ulong h0=sw64(a[0]),h1=sw64(a[1]),h2=sw64(a[2]),h3=sw64(a[3]);
+ uint bits=clz(h0);if(h0==0){bits=64+clz(h1);if(h1==0){bits=128+clz(h2);if(h2==0)bits=192+clz(h3);}} atomic_max(bestbits,bits);
+ int less=(h0<target[0])||(h0==target[0]&&((h1<target[1])||(h1==target[1]&&((h2<target[2])||(h2==target[2]&&h3<target[3])))));
+ if(less&&atomic_cmpxchg(found,0,1)==0)nonce[0]=n;
+}
+"""
 
 STATUS_FIELDS = [
     ("anchorBlock", "uint256"), ("anchor", "bytes32"), ("prevWork", "bytes32"),
@@ -111,6 +137,108 @@ def cost(wei):
     return f"${eth * ETH_USD:,.2f} ({eth:.6f} ETH)"
 
 
+def mine_round(devices, prefix, target, is_stale):
+    """Mine one job on all GPUs, with optimized one-block Keccak input."""
+    if LOCAL_SIZE <= 0 or GLOBAL_SIZE < LOCAL_SIZE or GLOBAL_SIZE % LOCAL_SIZE:
+        raise RuntimeError("MINERPOTATOS_GLOBAL must be a multiple of MINERPOTATOS_LOCAL")
+    if len(prefix) != 116:
+        raise RuntimeError(f"internal error: expected 116 prefix bytes, got {len(prefix)}")
+
+    base_state = np.frombuffer(prefix[:104], dtype="<u8").copy()
+    target_bytes = int(target).to_bytes(32, "big")
+    target_words = np.array(
+        [int.from_bytes(target_bytes[i:i + 8], "big") for i in range(0, 32, 8)],
+        dtype=np.uint64,
+    )
+    stop = threading.Event()
+    found = queue.Queue()
+    stats = [0] * len(devices)
+    best = [0] * len(devices)
+    previous = [0] * len(devices)
+    started = last_report = time.time()
+
+    def worker(index, device):
+        try:
+            context = cl.Context([device])
+            command_queue = cl.CommandQueue(context)
+            program = cl.Program(context, FAST_KERNEL).build()
+            kernel = cl.Kernel(program, "mine")
+            flags = cl.mem_flags
+            state_buffer = cl.Buffer(context, flags.READ_ONLY | flags.COPY_HOST_PTR, hostbuf=base_state)
+            target_buffer = cl.Buffer(context, flags.READ_ONLY | flags.COPY_HOST_PTR, hostbuf=target_words)
+            hit = np.zeros(1, np.uint32)
+            nonce = np.zeros(1, np.uint64)
+            bits = np.zeros(1, np.uint32)
+            hit_buffer = cl.Buffer(context, flags.READ_WRITE | flags.COPY_HOST_PTR, hostbuf=hit)
+            nonce_buffer = cl.Buffer(context, flags.READ_WRITE | flags.COPY_HOST_PTR, hostbuf=nonce)
+            bits_buffer = cl.Buffer(context, flags.READ_WRITE | flags.COPY_HOST_PTR, hostbuf=bits)
+            base = (random.getrandbits(64) + index * GLOBAL_SIZE) & ((1 << 64) - 1)
+            while not stop.is_set():
+                hit[0] = 0
+                cl.enqueue_copy(command_queue, hit_buffer, hit)
+                kernel(
+                    command_queue, (GLOBAL_SIZE,), (LOCAL_SIZE,), state_buffer, target_buffer,
+                    np.uint64(base), hit_buffer, nonce_buffer, bits_buffer,
+                )
+                command_queue.finish()
+                cl.enqueue_copy(command_queue, hit, hit_buffer)
+                cl.enqueue_copy(command_queue, nonce, nonce_buffer)
+                cl.enqueue_copy(command_queue, bits, bits_buffer)
+                command_queue.finish()
+                stats[index] += GLOBAL_SIZE
+                best[index] = max(best[index], int(bits[0]))
+                if hit[0]:
+                    found.put(int(nonce[0]))
+                    stop.set()
+                    return
+                base = (base + GLOBAL_SIZE * len(devices)) & ((1 << 64) - 1)
+        except Exception as exc:
+            found.put(RuntimeError(f"GPU {index} ({device.name.strip()}): {exc}"))
+            stop.set()
+
+    workers = [threading.Thread(target=worker, args=(i, device), daemon=True)
+               for i, device in enumerate(devices)]
+    for worker_thread in workers:
+        worker_thread.start()
+    try:
+        next_stale = time.time() + STALE_SECONDS
+        while not stop.is_set():
+            time.sleep(1)
+            now = time.time()
+            interval = max(now - last_report, 0.001)
+            rates = [(stats[i] - previous[i]) / interval for i in range(len(devices))]
+            previous[:] = stats
+            last_report = now
+            speed = sum(rates)
+            probability = int(target) / 2**256
+            expected = 1 / (speed * probability) if speed and probability else float("inf")
+            chance = (1 - math.exp(-speed * 60 * probability)) * 100 if speed else 0
+            per_gpu = " ".join(f"{i}:{gpu.fmt_rate(rate)}" for i, rate in enumerate(rates))
+            print(
+                f"  GPUs {len(devices)}  total {gpu.fmt_rate(speed)}  [{per_gpu}]  "
+                f"hashes {sum(stats)}  best {max(best)}/256 bits  "
+                f"elapsed {gpu.fmt_time(now-started)}  expected {gpu.fmt_time(expected)}  "
+                f"chance/min {chance:.2f}%",
+                flush=True,
+            )
+            if now >= next_stale:
+                next_stale = now + STALE_SECONDS
+                try:
+                    if is_stale():
+                        stop.set()
+                        return None
+                except Exception as exc:
+                    print(f"  stale check failed: {exc}; continuing", flush=True)
+        item = found.get_nowait() if not found.empty() else None
+        if isinstance(item, Exception):
+            raise item
+        return item
+    finally:
+        stop.set()
+        for worker_thread in workers:
+            worker_thread.join(timeout=3)
+
+
 def main():
     private_key = os.getenv("MINERPOTATOS_PRIVATE_KEY")
     if not private_key:
@@ -145,7 +273,7 @@ def main():
             expired = int(fresh["blockNumber"]) - int(job["anchorBlock"]) >= int(job["anchorWindow"]) - ANCHOR_MARGIN
             return bytes(fresh["prevWork"]) != bytes(job["prevWork"]) or int(fresh["target"]) < target or expired
 
-        nonce = gpu.mine_round(devices, prefix, target, stale)
+        nonce = mine_round(devices, prefix, target, stale)
         if nonce is None:
             print("  work changed or anchor aged -> remine", flush=True)
             continue
