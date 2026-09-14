@@ -27,6 +27,12 @@ export HASHAPE_GLOBAL=1048576
 python3 -u hashape_paid.py
 ```
 
+Mint costs are shown in ETH and approximate USD using a fixed `$2,500/ETH` rate. No price API is queried. To use another fixed rate:
+
+```bash
+export HASHAPE_ETH_USD=3000
+```
+
 `HASHAPE_MAX_MINTS=0` runs until the wallet reaches the contract's 5-NFT cap. The miner auto-detects every OpenCL GPU, aggregates hashrate and best bits, remine on challenge rotation, CPU-verifies hits, simulates the mint, checks fee/gas funds, signs locally, submits, and waits for confirmation.
 
 Optional RPC override:

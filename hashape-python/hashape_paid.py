@@ -27,6 +27,7 @@ RPC_URLS = [x.strip() for x in os.getenv(
 MAX_MINTS = int(os.getenv("HASHAPE_MAX_MINTS", "0"))
 STALE_SECONDS = float(os.getenv("HASHAPE_STALE_CHECK_SECONDS", "3"))
 PRIORITY_FEE = int(os.getenv("HASHAPE_PRIORITY_FEE_WEI", "2000000"))
+ETH_USD = float(os.getenv("HASHAPE_ETH_USD", "2500"))
 gpu.GLOBAL_SIZE = int(os.getenv("HASHAPE_GLOBAL", str(1 << 20)))
 gpu.STALE_SECONDS = STALE_SECONDS
 
@@ -100,6 +101,11 @@ def read_job(chain, address):
     }
 
 
+def fmt_cost(wei):
+    eth = int(wei) / 10**18
+    return f"${eth * ETH_USD:,.2f} ({eth:.6f} ETH)"
+
+
 def main():
     private_key = os.getenv("HASHAPE_PRIVATE_KEY")
     if not private_key:
@@ -108,7 +114,7 @@ def main():
     account = chain.w3.eth.account.from_key(private_key)
     devices = gpu.gpu_devices()
     completed = 0
-    print(f"HashApe Python OpenCL miner | address={account.address} GPUs={len(devices)}")
+    print(f"HashApe Python OpenCL miner | address={account.address} GPUs={len(devices)} ETH≈${ETH_USD:,.0f}")
     print("GPUs: " + ", ".join(f"{i}:{device.name.strip()}" for i, device in enumerate(devices)), flush=True)
 
     while MAX_MINTS == 0 or completed < MAX_MINTS:
@@ -122,7 +128,7 @@ def main():
         work_bits = 256 - math.log2(target)
         print(
             f"[{time.strftime('%H:%M:%S')}] token=#{job['token']} wallet={job['wallet_mints']}/5 "
-            f"epoch={job['epoch_id']} feeWei={job['fee']} work≈2^{work_bits:.2f} "
+            f"epoch={job['epoch_id']} mint={fmt_cost(job['fee'])} work≈2^{work_bits:.2f} "
             f"challenge=0x{job['challenge'].hex()[:16]}… target=0x{target:064x}", flush=True,
         )
         prefix = job["challenge"] + bytes.fromhex(account.address[2:])
@@ -159,8 +165,8 @@ def main():
         required = fee + gas * max_fee
         if balance < required:
             raise RuntimeError(
-                f"insufficient funds: balanceWei={balance} requiredWei≈{required} "
-                f"(mintFeeWei={fee}, gas={gas})"
+                f"insufficient funds: balance={fmt_cost(balance)} required≈{fmt_cost(required)} "
+                f"(mint={fmt_cost(fee)}, estimated gas={fmt_cost(gas * max_fee)})"
             )
         transaction = txfn.build_transaction({
             "from": account.address, "value": fee,
