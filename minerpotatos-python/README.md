@@ -25,6 +25,7 @@ export MINERPOTATOS_PRIVATE_KEY="0xYOUR_PRIVATE_KEY"
 export MINERPOTATOS_MAX_MINTS=10
 export MINERPOTATOS_GLOBAL=4194304
 export MINERPOTATOS_LOCAL=256
+export MINERPOTATOS_NONCES_PER_ITEM=64
 python3 -u minerpotatos_paid.py
 ```
 
@@ -40,8 +41,10 @@ export MINERPOTATOS_RPCS="https://rpc.minerpotatos.xyz,https://your-backup-rpc"
 ```
 
 The status line shows aggregate speed followed by each device's rate. For RTX
-5090 systems, start with `GLOBAL=4194304` and `LOCAL=256`. You can benchmark
-`LOCAL=128`, `256`, and `512`; both values must divide `GLOBAL` exactly. Compare
-rates only after kernel compilation and at least 10 seconds of mining.
+5090 systems, start with `GLOBAL=4194304`, `LOCAL=256`, and
+`NONCES_PER_ITEM=64`. The last setting makes each OpenCL dispatch do enough work
+to avoid Python/driver launch gaps. You can benchmark `LOCAL=128`, `256`, and
+`512`; `LOCAL` must divide `GLOBAL` exactly. Compare rates only after kernel
+compilation and at least 10 seconds of mining.
 
 Keep the private key secret and fund its Robinhood Chain address with enough ETH for each current mint price plus gas.

@@ -23,6 +23,7 @@ gpu = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gpu)
 GLOBAL_SIZE = int(os.getenv("MINERPOTATOS_GLOBAL", str(1 << 22)))
 LOCAL_SIZE = int(os.getenv("MINERPOTATOS_LOCAL", "256"))
+NONCES_PER_ITEM = int(os.getenv("MINERPOTATOS_NONCES_PER_ITEM", "64"))
 STALE_SECONDS = float(os.getenv("MINERPOTATOS_STALE_CHECK_SECONDS", "3"))
 
 CHAIN_ID = 4663
@@ -47,17 +48,22 @@ ulong rol(ulong x,int n){return (x<<n)|(x>>(64-n));}
 uint sw32(uint x){return ((x&0xffU)<<24)|((x&0xff00U)<<8)|((x>>8)&0xff00U)|(x>>24);}
 ulong sw64(ulong x){return ((ulong)sw32((uint)x)<<32)|(ulong)sw32((uint)(x>>32));}
 void perm(ulong a[25]){for(int r=0;r<24;r++){ulong c[5],d[5];for(int x=0;x<5;x++)c[x]=a[x]^a[x+5]^a[x+10]^a[x+15]^a[x+20];for(int x=0;x<5;x++)d[x]=c[(x+4)%5]^rol(c[(x+1)%5],1);for(int i=0;i<25;i++)a[i]^=d[i%5];ulong t=a[1],u;for(int i=0;i<24;i++){u=a[PI[i]];a[PI[i]]=rol(t,RH[i]);t=u;}for(int y=0;y<5;y++){ulong b0=a[5*y],b1=a[1+5*y],b2=a[2+5*y],b3=a[3+5*y],b4=a[4+5*y];a[5*y]=b0^((~b1)&b2);a[1+5*y]=b1^((~b2)&b3);a[2+5*y]=b2^((~b3)&b4);a[3+5*y]=b3^((~b4)&b0);a[4+5*y]=b4^((~b0)&b1);}a[0]^=RC[r];}}
-__kernel void mine(__global const ulong* base_state,__global const ulong* target,ulong base,volatile __global uint* found,__global ulong* nonce,__global uint* bestbits){
- ulong n=base+(ulong)get_global_id(0); ulong a[25];
+__kernel void mine(__global const ulong* base_state,__global const ulong* target,ulong base,uint iterations,volatile __global uint* found,__global ulong* nonce,__global uint* bestbits){
+ ulong first=base+(ulong)get_global_id(0)*(ulong)iterations;
+ for(uint iteration=0;iteration<iterations;iteration++){
+ ulong n=first+(ulong)iteration; ulong a[25];
  for(int i=0;i<13;i++)a[i]=base_state[i];
  a[13]=((ulong)sw32((uint)(n>>32)))<<32;
  a[14]=(ulong)sw32((uint)n)|0x0000000100000000UL;
  a[15]=0UL;a[16]=0x8000000000000000UL;for(int i=17;i<25;i++)a[i]=0UL;
  perm(a);
- ulong h0=sw64(a[0]),h1=sw64(a[1]),h2=sw64(a[2]),h3=sw64(a[3]);
- uint bits=clz(h0);if(h0==0){bits=64+clz(h1);if(h1==0){bits=128+clz(h2);if(h2==0)bits=192+clz(h3);}} atomic_max(bestbits,bits);
- int less=(h0<target[0])||(h0==target[0]&&((h1<target[1])||(h1==target[1]&&((h2<target[2])||(h2==target[2]&&h3<target[3])))));
- if(less&&atomic_cmpxchg(found,0,1)==0)nonce[0]=n;
+ ulong h0=sw64(a[0]); uint bits=clz(h0);
+ if(bits>=24)atomic_max(bestbits,bits);
+ int less=0;
+ if(h0<target[0])less=1;
+ else if(h0==target[0]){ulong h1=sw64(a[1]);if(h1<target[1])less=1;else if(h1==target[1]){ulong h2=sw64(a[2]);if(h2<target[2])less=1;else if(h2==target[2]){ulong h3=sw64(a[3]);if(h3<target[3])less=1;}}}
+ if(less){if(atomic_cmpxchg(found,0,1)==0)nonce[0]=n;return;}
+ }
 }
 """
 
@@ -141,6 +147,8 @@ def mine_round(devices, prefix, target, is_stale):
     """Mine one job on all GPUs, with optimized one-block Keccak input."""
     if LOCAL_SIZE <= 0 or GLOBAL_SIZE < LOCAL_SIZE or GLOBAL_SIZE % LOCAL_SIZE:
         raise RuntimeError("MINERPOTATOS_GLOBAL must be a multiple of MINERPOTATOS_LOCAL")
+    if NONCES_PER_ITEM <= 0:
+        raise RuntimeError("MINERPOTATOS_NONCES_PER_ITEM must be positive")
     if len(prefix) != 116:
         raise RuntimeError(f"internal error: expected 116 prefix bytes, got {len(prefix)}")
 
@@ -178,20 +186,21 @@ def mine_round(devices, prefix, target, is_stale):
                 cl.enqueue_copy(command_queue, hit_buffer, hit)
                 kernel(
                     command_queue, (GLOBAL_SIZE,), (LOCAL_SIZE,), state_buffer, target_buffer,
-                    np.uint64(base), hit_buffer, nonce_buffer, bits_buffer,
+                    np.uint64(base), np.uint32(NONCES_PER_ITEM), hit_buffer, nonce_buffer, bits_buffer,
                 )
                 command_queue.finish()
                 cl.enqueue_copy(command_queue, hit, hit_buffer)
                 cl.enqueue_copy(command_queue, nonce, nonce_buffer)
                 cl.enqueue_copy(command_queue, bits, bits_buffer)
                 command_queue.finish()
-                stats[index] += GLOBAL_SIZE
+                hashes_per_launch = GLOBAL_SIZE * NONCES_PER_ITEM
+                stats[index] += hashes_per_launch
                 best[index] = max(best[index], int(bits[0]))
                 if hit[0]:
                     found.put(int(nonce[0]))
                     stop.set()
                     return
-                base = (base + GLOBAL_SIZE * len(devices)) & ((1 << 64) - 1)
+                base = (base + hashes_per_launch * len(devices)) & ((1 << 64) - 1)
         except Exception as exc:
             found.put(RuntimeError(f"GPU {index} ({device.name.strip()}): {exc}"))
             stop.set()
