@@ -37,14 +37,17 @@ __constant int RH[24]={1,3,6,10,15,21,28,36,45,55,2,14,27,41,56,8,25,43,62,18,39
 ulong rol(ulong x,int n){return n?((x<<n)|(x>>(64-n))):x;}
 void perm(ulong a[25]){for(int r=0;r<24;r++){ulong c[5],d[5];for(int x=0;x<5;x++)c[x]=a[x]^a[x+5]^a[x+10]^a[x+15]^a[x+20];for(int x=0;x<5;x++)d[x]=c[(x+4)%5]^rol(c[(x+1)%5],1);for(int i=0;i<25;i++)a[i]^=d[i%5];ulong t=a[1],u;for(int i=0;i<24;i++){u=a[PI[i]];a[PI[i]]=rol(t,RH[i]);t=u;}for(int y=0;y<5;y++){ulong b0=a[5*y],b1=a[1+5*y],b2=a[2+5*y],b3=a[3+5*y],b4=a[4+5*y];a[5*y]=b0^((~b1)&b2);a[1+5*y]=b1^((~b2)&b3);a[2+5*y]=b2^((~b3)&b4);a[3+5*y]=b3^((~b4)&b0);a[4+5*y]=b4^((~b0)&b1);}a[0]^=RC[r];}}
 __kernel void mine(__global const uchar* prefix,__global const uchar* target,ulong base,volatile __global uint* found,__global ulong* nonce,__global uint* bestbits,uint iters){
+ ulong n=base+(ulong)get_global_id(0);
+ uchar m[136]; for(int i=0;i<136;i++)m[i]=0; for(int i=0;i<76;i++)m[i]=prefix[i];
+ for(int i=0;i<8;i++)m[83-i]=(uchar)(n>>(8*i)); m[84]=1; m[135]=0x80;
  for(uint it=0;it<iters;it++){
-  ulong n=base+(ulong)get_global_id(0)+(ulong)it*(ulong)get_global_size(0);
-  uchar m[136]; for(int i=0;i<136;i++)m[i]=0; for(int i=0;i<76;i++)m[i]=prefix[i];
-  for(int i=0;i<8;i++)m[83-i]=(uchar)(n>>(8*i)); m[84]=1; m[135]=0x80; ulong a[25]; for(int i=0;i<25;i++)a[i]=0;
+  ulong a[25]; for(int i=0;i<25;i++)a[i]=0;
   for(int i=0;i<17;i++){ulong v=0;for(int k=0;k<8;k++)v|=((ulong)m[i*8+k])<<(8*k);a[i]^=v;} perm(a); uchar h[32];
   for(int i=0;i<4;i++)for(int k=0;k<8;k++)h[i*8+k]=(uchar)(a[i]>>(8*k)); uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{bits+=clz((uint)h[i])-24;break;}} atomic_max(bestbits,bits);
   int less=0;for(int i=0;i<32;i++){if(h[i]<target[i]){less=1;break;}if(h[i]>target[i])break;} if(less&&atomic_cmpxchg(found,0,1)==0)nonce[0]=n;
   if(found[0])return;
+  n+=get_global_size(0);
+  for(int i=0;i<8;i++)m[83-i]=(uchar)(n>>(8*i));
  }
 }
 """
