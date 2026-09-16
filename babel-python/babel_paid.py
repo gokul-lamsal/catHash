@@ -31,58 +31,19 @@ GLOBAL_SIZE = int(os.getenv("BABEL_GLOBAL", str(8 * 1024 * 1024)))
 
 # ── Optimised kernel: each work-item loops ITERS times ───────────────────────
 KERNEL = r"""
-__constant uint RCL[24]={0x00000001u,0x00008082u,0x0000808au,0x80008000u,0x0000808bu,0x80000001u,0x80008081u,0x00008009u,0x0000008au,0x00000088u,0x80008009u,0x8000000au,0x8000808bu,0x0000008bu,0x00008089u,0x00008003u,0x00008002u,0x00000080u,0x0000800au,0x8000000au,0x80008081u,0x00008080u,0x80000001u,0x80008008u};
-__constant uint RCH[24]={0x00000000u,0x00000000u,0x80000000u,0x80000000u,0x00000000u,0x00000000u,0x80000000u,0x80000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x80000000u,0x80000000u,0x80000000u,0x80000000u,0x80000000u,0x00000000u,0x80000000u,0x80000000u,0x80000000u,0x00000000u,0x80000000u};
+__constant ulong RC[24]={1UL,0x8082UL,0x800000000000808aUL,0x8000000080008000UL,0x808bUL,0x80000001UL,0x8000000080008081UL,0x8000000000008009UL,0x8aUL,0x88UL,0x80008009UL,0x8000000aUL,0x8000808bUL,0x800000000000008bUL,0x8000000000008089UL,0x8000000000008003UL,0x8000000000008002UL,0x8000000000000080UL,0x800aUL,0x800000008000000aUL,0x8000000080008081UL,0x8000000000008080UL,0x80000001UL,0x8000000080008008UL};
 __constant int PI[24]={10,7,11,17,18,3,5,16,8,21,24,4,15,23,19,13,12,2,20,14,22,9,6,1};
 __constant int RH[24]={1,3,6,10,15,21,28,36,45,55,2,14,27,41,56,8,25,43,62,18,39,61,20,44};
-void perm(uint s[50]){
- for(int r=0;r<24;r++){
-  uint c0=s[0]^s[10]^s[20]^s[30]^s[40];uint c1=s[2]^s[12]^s[22]^s[32]^s[42];uint c2=s[4]^s[14]^s[24]^s[34]^s[44];uint c3=s[6]^s[16]^s[26]^s[36]^s[46];uint c4=s[8]^s[18]^s[28]^s[38]^s[48];
-  uint g0=s[1]^s[11]^s[21]^s[31]^s[41];uint g1=s[3]^s[13]^s[23]^s[33]^s[43];uint g2=s[5]^s[15]^s[25]^s[35]^s[45];uint g3=s[7]^s[17]^s[27]^s[37]^s[47];uint g4=s[9]^s[19]^s[29]^s[39]^s[49];
-  uint d0=c4^((c1<<1)|(g1>>31));uint e0=g4^((g1<<1)|(c1>>31));
-  uint d1=c0^((c2<<1)|(g2>>31));uint e1=g0^((g2<<1)|(c2>>31));
-  uint d2=c1^((c3<<1)|(g3>>31));uint e2=g1^((g3<<1)|(c3>>31));
-  uint d3=c2^((c4<<1)|(g4>>31));uint e3=g2^((g4<<1)|(c4>>31));
-  uint d4=c3^((c0<<1)|(g0>>31));uint e4=g3^((g0<<1)|(c0>>31));
-  s[0]^=d0;s[1]^=e0;s[2]^=d1;s[3]^=e1;s[4]^=d2;s[5]^=e2;s[6]^=d3;s[7]^=e3;s[8]^=d4;s[9]^=e4;
-  s[10]^=d0;s[11]^=e0;s[12]^=d1;s[13]^=e1;s[14]^=d2;s[15]^=e2;s[16]^=d3;s[17]^=e3;s[18]^=d4;s[19]^=e4;
-  s[20]^=d0;s[21]^=e0;s[22]^=d1;s[23]^=e1;s[24]^=d2;s[25]^=e2;s[26]^=d3;s[27]^=e3;s[28]^=d4;s[29]^=e4;
-  s[30]^=d0;s[31]^=e0;s[32]^=d1;s[33]^=e1;s[34]^=d2;s[35]^=e2;s[36]^=d3;s[37]^=e3;s[38]^=d4;s[39]^=e4;
-  s[40]^=d0;s[41]^=e0;s[42]^=d1;s[43]^=e1;s[44]^=d2;s[45]^=e2;s[46]^=d3;s[47]^=e3;s[48]^=d4;s[49]^=e4;
-  uint t0=s[2],t1=s[3];
-  for(int i=0;i<24;i++){int q=PI[i];int rt=RH[i];uint u0=s[2*q],u1=s[2*q+1],x0=t0,x1=t1;if(rt>=32){rt-=32;x0=t1;x1=t0;}if(rt==0){s[2*q]=x0;s[2*q+1]=x1;}else{s[2*q]=(x0<<rt)|(x1>>(32-rt));s[2*q+1]=(x1<<rt)|(x0>>(32-rt));}t0=u0;t1=u1;}
-  for(int y=0;y<5;y++){
-   int b=y*10;
-   uint x0=s[b],x1=s[b+2],x2=s[b+4],x3=s[b+6],x4=s[b+8];
-   uint y0=s[b+1],y1=s[b+3],y2=s[b+5],y3=s[b+7],y4=s[b+9];
-   s[b]=x0^((~x1)&x2);s[b+1]=y0^((~y1)&y2);
-   s[b+2]=x1^((~x2)&x3);s[b+3]=y1^((~y2)&y3);
-   s[b+4]=x2^((~x3)&x4);s[b+5]=y2^((~y3)&y4);
-   s[b+6]=x3^((~x4)&x0);s[b+7]=y3^((~y4)&y0);
-   s[b+8]=x4^((~x0)&x1);s[b+9]=y4^((~y0)&y1);
-  }
-  s[0]^=RCL[r];s[1]^=RCH[r];
- }
-}
+ulong rol(ulong x,int n){return n?((x<<n)|(x>>(64-n))):x;}
+void perm(ulong a[25]){for(int r=0;r<24;r++){ulong c[5],d[5];for(int x=0;x<5;x++)c[x]=a[x]^a[x+5]^a[x+10]^a[x+15]^a[x+20];for(int x=0;x<5;x++)d[x]=c[(x+4)%5]^rol(c[(x+1)%5],1);for(int i=0;i<25;i++)a[i]^=d[i%5];ulong t=a[1],u;for(int i=0;i<24;i++){u=a[PI[i]];a[PI[i]]=rol(t,RH[i]);t=u;}for(int y=0;y<5;y++){ulong b0=a[5*y],b1=a[1+5*y],b2=a[2+5*y],b3=a[3+5*y],b4=a[4+5*y];a[5*y]=b0^((~b1)&b2);a[1+5*y]=b1^((~b2)&b3);a[2+5*y]=b2^((~b3)&b4);a[3+5*y]=b3^((~b4)&b0);a[4+5*y]=b4^((~b0)&b1);}a[0]^=RC[r];}}
 __kernel void mine(__global const uchar* prefix,__global const uchar* target,ulong base,volatile __global uint* found,__global ulong* nonce,__global uint* bestbits,uint iters){
  ulong n=base+(ulong)get_global_id(0);
  uchar m[136]; for(int i=0;i<136;i++)m[i]=0; for(int i=0;i<76;i++)m[i]=prefix[i];
  for(int i=0;i<8;i++)m[83-i]=(uchar)(n>>(8*i)); m[84]=1; m[135]=0x80;
  for(uint it=0;it<iters;it++){
-  uint a[50]; for(int i=0;i<50;i++)a[i]=0;
-  for(int i=0;i<17;i++){
-   uint v0=((uint)m[8*i])|((uint)m[8*i+1]<<8)|((uint)m[8*i+2]<<16)|((uint)m[8*i+3]<<24);
-   uint v1=((uint)m[8*i+4])|((uint)m[8*i+5]<<8)|((uint)m[8*i+6]<<16)|((uint)m[8*i+7]<<24);
-   a[2*i]^=v0;a[2*i+1]^=v1;
-  }
-  perm(a);
-  uchar h[32];
-  for(int i=0;i<4;i++){
-   uint v0=a[2*i],v1=a[2*i+1];
-   h[8*i]=(uchar)v0;h[8*i+1]=(uchar)(v0>>8);h[8*i+2]=(uchar)(v0>>16);h[8*i+3]=(uchar)(v0>>24);
-   h[8*i+4]=(uchar)v1;h[8*i+5]=(uchar)(v1>>8);h[8*i+6]=(uchar)(v1>>16);h[8*i+7]=(uchar)(v1>>24);
-  }
-  uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{bits+=clz((uint)h[i])-24;break;}} atomic_max(bestbits,bits);
+  ulong a[25]; for(int i=0;i<25;i++)a[i]=0;
+  for(int i=0;i<17;i++){ulong v=0;for(int k=0;k<8;k++)v|=((ulong)m[i*8+k])<<(8*k);a[i]^=v;} perm(a); uchar h[32];
+  for(int i=0;i<4;i++)for(int k=0;k<8;k++)h[i*8+k]=(uchar)(a[i]>>(8*k)); uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{bits+=clz((uint)h[i])-24;break;}} atomic_max(bestbits,bits);
   int less=0;for(int i=0;i<32;i++){if(h[i]<target[i]){less=1;break;}if(h[i]>target[i])break;} if(less&&atomic_cmpxchg(found,0,1)==0)nonce[0]=n;
   if(found[0])return;
   n+=get_global_size(0);
