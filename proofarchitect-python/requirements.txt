@@ -1,0 +1,4 @@
+numpy>=1.26
+pyopencl>=2024.1
+pycryptodome>=3.20
+web3>=7.0
