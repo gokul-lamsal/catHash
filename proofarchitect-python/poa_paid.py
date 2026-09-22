@@ -100,6 +100,13 @@ ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"name": "wallet", "type": "address"}],
+        "name": "stakingDiscountMilli",
+        "outputs": [{"name": "", "type": "uint16"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [{"name": "miner", "type": "address"}],
         "name": "targetFor",
         "outputs": [{"name": "", "type": "uint256"}],
@@ -202,6 +209,12 @@ def work_bits(target):
     if target <= 0:
         return float("inf")
     return max(0.0, 256.0 - math.log2(target))
+
+
+def fmt_discount(milli):
+    if milli is None:
+        return "—"
+    return f"{int(milli) / 1000:.3f}/6.000 bits"
 
 
 def gpu_devices():
@@ -380,6 +393,12 @@ def mine_round(devices, prefix, target, is_stale):
 def snapshot(chain, address):
     def read(w3, contract):
         due, fee = contract.functions.currentMintDue().call()
+        try:
+            discount_milli = int(contract.functions.stakingDiscountMilli(address).call())
+        except Exception:
+            # The official UI intentionally displays an em dash when this
+            # optional staking read reverts. targetFor remains authoritative.
+            discount_milli = None
         return {
             "due": int(due),
             "fee": int(fee),
@@ -389,6 +408,7 @@ def snapshot(chain, address):
             "paused": bool(contract.functions.mintPaused().call()),
             "bits": int(contract.functions.requiredBits(address).call()),
             "milli": int(contract.functions.requiredMilli(address).call()),
+            "discount_milli": discount_milli,
             "target": int(contract.functions.targetFor(address).call()),
         }
 
@@ -493,7 +513,8 @@ def main():
         target = state["target"]
         print(
             f"[{time.strftime('%H:%M:%S')}] wave={state['wave']} minted={state['minted']}/{state['supply']} "
-            f"required={state['bits']} bits ({state['milli']}/1000) work≈2^{work_bits(target):.2f} "
+            f"required={state['bits']} bits ({state['milli']}/1000) "
+            f"discount={fmt_discount(state['discount_milli'])} work≈2^{work_bits(target):.2f} "
             f"due={fmt_native(state['due'])} fee={fmt_native(state['fee'])} "
             f"target=0x{target:064x}",
             flush=True,

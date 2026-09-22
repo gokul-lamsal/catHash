@@ -60,8 +60,12 @@ export POA_FEE_FLOOR_WEI=50000000000
 
 The log shows total and aggregate hash rate, best leading-zero result,
 expected time, chance per minute, the live target, exact mint due, signed
-transaction hash, and receipt status. `POA_GLOBAL` is per GPU; increase it
-only if GPU memory and stability allow it.
+transaction hash, receipt status, and the wallet's staking discount. The
+discount is read from `stakingDiscountMilli(wallet)` for display, but the
+contract's live `targetFor(wallet)` is always the acceptance authority. If the
+staking read reverts, the log shows `discount=—` and mining continues. The
+discount cap is six bits. `POA_GLOBAL` is per GPU; increase it only if GPU
+memory and stability allow it.
 
 The script does not use Chromium or WebGPU. It uses OpenCL so it can run on a
 headless Linux VPS with the vendor's GPU driver.
