@@ -44,7 +44,7 @@ For continuous paid minting, set `POA_MAX_MINTS=0`:
 
 ```bash
 export POA_MAX_MINTS=0
-export POA_GLOBAL=1048576
+export POA_GLOBAL=8388608
 export POA_STALE_CHECK_SECONDS=3
 python3 -u poa_paid.py
 ```
@@ -53,6 +53,7 @@ Useful optional settings:
 
 ```bash
 export POA_GLOBAL=2097152
+export POA_ITERS=16
 export POA_RPCS='https://rpc.mainnet.arc.io,https://rpc.blockdaemon.mainnet.arc.io,https://rpc.drpc.mainnet.arc.io'
 export POA_FEE_FLOOR_WEI=50000000000
 ```
@@ -64,3 +65,20 @@ only if GPU memory and stability allow it.
 
 The script does not use Chromium or WebGPU. It uses OpenCL so it can run on a
 headless Linux VPS with the vendor's GPU driver.
+
+### `PLATFORM_NOT_FOUND_KHR`
+
+This means PyOpenCL is installed but the system OpenCL ICD is missing or the
+container cannot see the GPU. On an Ubuntu host/container, run:
+
+```bash
+apt-get update
+apt-get install -y clinfo ocl-icd-libopencl1 nvidia-opencl-icd
+nvidia-smi
+clinfo | grep -E "Platform Name|Device Name|Device Type"
+```
+
+If `nvidia-smi` fails inside Docker, recreate the container with GPU access
+(`--gpus all`) and the NVIDIA runtime. On Kubernetes, the pod must request an
+NVIDIA GPU resource. CUDA and `nvidia-smi` alone are not enough for PyOpenCL;
+the NVIDIA OpenCL ICD must also be available.
